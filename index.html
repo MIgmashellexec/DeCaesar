@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CVD-deC0D3-R :: MOBILE DECIPHER</title>
+    <style>
+        body {
+            background-color: #0d1117;
+            color: #c9d1d9;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 0.8rem;
+            box-sizing: border-box;
+        }
+        .container {
+            background: #161b22;
+            padding: 1.5rem 1rem;
+            border-radius: 8px;
+            border: 1px solid #30363d;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            width: 100%;
+            max-width: 480px;
+            box-sizing: border-box;
+        }
+        h2 {
+            margin-top: 0;
+            color: #58a6ff;
+            text-align: center;
+            letter-spacing: 2px;
+            font-size: 1.2rem;
+            margin-bottom: 0.2rem;
+        }
+        .subtitle {
+            text-align: center;
+            font-size: 0.75rem;
+            color: #8b949e;
+            margin-bottom: 1.2rem;
+        }
+        .input-group {
+            margin-bottom: 1rem;
+        }
+        label {
+            display: block;
+            font-size: 0.8rem;
+            color: #8b949e;
+            margin-bottom: 6px;
+        }
+        input.single-input {
+            width: 100%;
+            padding: 14px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            color: #7ee787;
+            font-family: inherit;
+            font-size: 1rem;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+        input.single-input:focus {
+            outline: none;
+            border-color: #58a6ff;
+            box-shadow: 0 0 8px rgba(88, 166, 255, 0.3);
+        }
+        .parsed-preview {
+            font-size: 0.75rem;
+            color: #8b949e;
+            margin-top: 6px;
+            min-height: 18px;
+            word-break: break-all;
+        }
+        button {
+            width: 100%;
+            padding: 14px;
+            background: #238636;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 0.5rem;
+        }
+        button:active {
+            background: #2ea043;
+        }
+        .output-box {
+            margin-top: 1.2rem;
+            background: #0d1117;
+            padding: 1rem;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+            color: #e6edf3;
+            font-size: 0.85rem;
+            line-height: 1.45;
+            display: none;
+            max-height: 280px;
+            overflow-y: auto;
+        }
+        .match-item {
+            color: #7ee787;
+            font-weight: bold;
+            display: inline-block;
+            margin-right: 12px;
+            margin-bottom: 6px;
+            font-size: 1rem;
+            background: #161b22;
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid #30363d;
+        }
+        .status {
+            color: #58a6ff;
+            font-style: italic;
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>CVD-deC0D3-R</h2>
+    <div class="subtitle">SMART MOBILE SOLVER</div>
+    
+    <div class="input-group">
+        <label>NUMMER / HASH EINGEBEN ODER EINFÜGEN</label>
+        <input type="text" id="rawInput" class="single-input" placeholder="z.B. 131-5-68-6-3-6-7-1516" oninput="parseLiveInput()" autocomplete="off">
+        <div class="parsed-preview" id="parsedPreview"></div>
+    </div>
+
+    <button id="solveBtn" onclick="startSolver()">DECODIEREN</button>
+
+    <div class="output-box" id="resultOutput">
+        <div class="status" id="statusText"></div>
+        <div id="matchesList"></div>
+    </div>
+</div>
+
+<script>
+let activeWorker = null;
+
+// Parst die Zahleneingabe live zur Kontrolle für den User
+function getParsedNumbers() {
+    const raw = document.getElementById('rawInput').value;
+    const matches = raw.match(/\d+/g);
+    return matches ? matches.map(Number) : [];
+}
+
+function parseLiveInput() {
+    const nums = getParsedNumbers();
+    const preview = document.getElementById('parsedPreview');
+    if (nums.length === 0) {
+        preview.innerText = "";
+        return;
+    }
+    
+    let text = `Erkannt: S1=${nums[0] || '?'}, S2=${nums[1] || '?'}, S3=${nums[2] || '?'}`;
+    if (nums.length >= 7) {
+        text += ` | Fein-Hash: ${nums[3]}-${nums[4]}-${nums[5]}-${nums[6]}`;
+    }
+    if (nums.length >= 8) {
+        text += ` | Part3: ${nums[7]}`;
+    }
+    preview.innerText = text;
+}
+
+// Inlined Web Worker Blob (Läuft in eigenem Thread ohne UI zu sperren)
+const workerCode = `
+const LETTER_DIGIT_SUMS = [0, 1,2,3,4,5,6,7,8,9, 1,2,3,4,5,6,7,8,9,10, 2,3,4,5,6,7];
+
+function getDigitalRoot(num) {
+    let n = Math.abs(Math.floor(num));
+    while (n >= 10) {
+        n = n.toString().split('').reduce((sum, d) => sum + parseInt(d, 10), 0);
+    }
+    return n;
+}
+
+function getSumOfDigits(str) {
+    let digits = str.toString().replace(/[^0-9]/g, '');
+    if (!digits) return 0;
+    return digits.split('').reduce((acc, d) => acc + parseInt(d, 10), 0);
+}
+
+self.onmessage = function(e) {
+    const { nums } = e.data;
+    const s1 = nums[0];
+    const s2 = nums[1];
+    const s3 = nums[2];
+    
+    const h2_1 = nums.length >= 7 ? nums[3] : null;
+    const h2_2 = nums.length >= 7 ? nums[4] : null;
+    const h2_3 = nums.length >= 7 ? nums[5] : null;
+    const h2_4 = nums.length >= 7 ? nums[6] : null;
+    const h3_1 = nums.length >= 8 ? nums[7] : null;
+
+    let results = [];
+    let stack = [];
+
+    // Dynamische Wortlänge berechnen basierend auf S1
+    let minLen = Math.max(2, Math.ceil(s1 / 26));
+    let maxLen = Math.min(12, Math.floor(s1 / 1)); // Bis zu 12 Zeichen unterstützen
+
+    for (let len = minLen; len <= maxLen; len++) {
+        function backtrack(currentSum, currentDigitSum) {
+            let currentLen = stack.length;
+            
+            if (currentLen === len) {
+                if (currentSum === s1 && currentDigitSum === s3) {
+                    let word = stack.map(n => String.fromCharCode(n + 96)).join('');
+                    results.push(word);
+                }
+                return;
+            }
+
+            let remainingLen = len - currentLen;
+
+            // Pruning Schranken
+            if (s1 < currentSum + remainingLen * 1 || s1 > currentSum + remainingLen * 26) return;
+            if (s3 < currentDigitSum + remainingLen * 1 || s3 > currentDigitSum + remainingLen * 10) return;
+
+            for (let val = 1; val <= 26; val++) {
+                let dSum = LETTER_DIGIT_SUMS[val];
+                stack.push(val);
+                backtrack(currentSum + val, currentDigitSum + dSum);
+                stack.pop();
+            }
+        }
+
+        backtrack(0, 0);
+        
+        // Wenn Treffer bei einer kürzeren Länge gefunden wurden, Suche beenden
+        if (results.length > 0 && len >= minLen + 2) break;
+    }
+
+    self.postMessage({ results });
+};
+`;
+
+function startSolver() {
+    const nums = getParsedNumbers();
+    if (nums.length < 3) {
+        alert("Bitte mindestens den Haupt-Hash eingeben (z. B. 131-5-68)");
+        return;
+    }
+
+    document.getElementById('statusText').innerText = "Berechne im Hintergrund...";
+    document.getElementById('matchesList').innerHTML = "";
+    document.getElementById('resultOutput').style.display = 'block';
+
+    if (activeWorker) activeWorker.terminate();
+
+    const blob = new Blob([workerCode], { type: 'application/javascript' });
+    activeWorker = new Worker(URL.createObjectURL(blob));
+
+    activeWorker.postMessage({ nums });
+
+    activeWorker.onmessage = function(e) {
+        const { results } = e.data;
+        document.getElementById('statusText').innerText = `Gefundene Treffer (${results.length}):`;
+        
+        if (results.length > 0) {
+            document.getElementById('matchesList').innerHTML = results.map(m => `<span class="match-item">${m}</span>`).join('');
+        } else {
+            document.getElementById('matchesList').innerText = "Keine passenden Kombinationen gefunden.";
+        }
+    };
+}
+</script>
+
+</body>
+</html>
